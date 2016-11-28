@@ -61,7 +61,7 @@ public class MovieService {
                 " RETURN m.title as movie, collect(a.name) as cast " +
                 " LIMIT {limit}", map("limit",limit));
         List nodes = new ArrayList();
-        List rels= new ArrayList();
+        List rels = new ArrayList();
         int i=0;
         while (result.hasNext()) {
             Map<String, Object> row = result.next();
