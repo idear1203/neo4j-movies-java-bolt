@@ -174,19 +174,23 @@ explorer.layout = (function() {
   _layout.force = function() {
     var _force;
     _force = {};
-    _force.init = function() {
+    _force.init = function(render) {
       var forceLayout, d3force, accelerateLayout;
       forceLayout = {};
       linkDistance = 45;
-      d3force = d3.layout.force().linkDistance(function(relationship) {
-        return relationship.source.radius + relationship.target.radius + linkDistance;
-      }).charge(-1000);
+      d3force = d3.layout.force().linkDistance(
+          linkDistance
+      ).charge(-1000);
       accelerateLayout = function() {
         var d3Tick;
         d3Tick = d3force.tick;
         return d3force.tick = function() {
           // TODO: collision detection
+          if (d3Tick()){
+            return true;
+          }
           render();
+          return false;
         }
       }
       accelerateLayout();
@@ -205,17 +209,32 @@ explorer.layout = (function() {
 })();
 
 explorer.viz = function(elem, graph, layout) {
-  var viz, svg, force, render, ref, ref1;
+  var viz, svg, force, render, ref, ref1, layoutDimension, width, height;
   viz = {};
-  svg = d3.select(elem).append("svg");
+  svg = d3.select(elem).append("svg").attr("pointer-events", "all");
+  width = window.innerWidth, height = window.innerHeight;
+  svg.attr("width", width).attr("height", height);
+  layoutDimension = 400;
+  viz.trigger = function() {
+    var args, event;
+    event = arguments[0], args = 2 <= arguments.length ? slice.call(arguments, 1) : [];
+  };
   render = function() {
-    var nodeGroups, relationshipGroups;
+    var i, j, nodeGroups, relationshipGroups, ref, ref1;
     nodeGroups = svg.selectAll('g.node').attr('transform', function(d) {
       return "translate(" + d.x + "," + d.y + ")";
     });
-    relationshipGroups = svg.selectAll('g.relationship').attr('transform', function(d) {
-      return "translate(" + d.source.x + " " + d.source.y + ") rotate(" + (d.naturalAngle + 180) + ")";
-    });
+    ref = explorer.renderers.node;
+    for (i = 0, len = ref.length; i < len; i++) {
+      renderer = ref[i];
+      nodeGroups.call(renderer.onTick, viz);
+    }
+    relationshipGroups = svg.selectAll('g.relationship');
+    ref1 = explorer.renderers.relationship;
+    for (j = 0; j < ref1.length; j++) {
+      renderer = ref1[j];
+      relationshipGroups.call(renderer.onTick, viz);
+    }
   };
 
   force = layout.init(render);
@@ -248,6 +267,7 @@ explorer.viz = function(elem, graph, layout) {
       nodeGroups.call(renderer.onGraphChange, viz);
     }
     nodeGroups.exit().remove();
+    force.update(graph, [300, 300]);
     return true;
   };
   return viz;
@@ -503,6 +523,43 @@ d3.json("/graph", d3callback);
     },
     onTick: noop
   });
+  arrowPath = new explorer.Renderer({
+    name: 'arrowPath',
+    onGraphChange: function(selection, viz) {
+      var paths;
+      paths = selection.selectAll('path.outline').data(function(rel) {
+        return [rel];
+      });
+      paths.enter().append('path').classed('outline', true);
+      paths.attr('fill', function(rel) {
+        return "#6DCE9E";
+      }).attr('stroke', 'none');
+      return paths.exit().remove();
+    },
+    onTick: noop
+  });
+  relLink = new explorer.Renderer({
+    name: 'relLink',
+    onGraphChange: function(selection, viz) {
+      var links;
+      links = selection.selectAll('.link').data(function(rel) {
+        return [rel];
+      });
+      links.enter().append("line").attr("class", "link");
+      links.attr('stroke', '#999')
+        .attr('stroke-opacity', '0.6px')
+        .attr('stroke-width', '1px');
+      return links.exit().remove();
+    },
+    onTick: function(selection, viz) {
+      return selection.selectAll('line')
+        .attr('x1', function(rel) { return rel.source.x })
+        .attr('y1', function(rel) { return rel.source.y })
+        .attr('x2', function(rel) { return rel.target.x })
+        .attr('y2', function(rel) { return rel.target.y });
+    }
+  });
   explorer.renderers.node.push(nodeOutline);
   explorer.renderers.node.push(nodeCaption);
+  explorer.renderers.relationship.push(relLink);
 })();
