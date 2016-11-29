@@ -1,5 +1,9 @@
 // Keep it simple and stupid!!
 
+// TODO:
+// 1. Style selection
+// 2. Multiple relationships between adjacent nodes
+
 var hasProp = {}.hasOwnProperty;
 var explorer = {};
 explorer.models = {};
@@ -437,5 +441,5 @@ d3.json("/graph", d3callback);
   });
   explorer.renderers.node.push(nodeOutline);
   explorer.renderers.node.push(nodeCaption);
-  explorer.renderers.relationship.push(relLink);
+  return explorer.renderers.relationship.push(relLink);
 })();
