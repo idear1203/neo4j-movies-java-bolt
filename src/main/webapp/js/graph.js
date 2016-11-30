@@ -944,7 +944,8 @@ d3.json("/graph", d3callback);
         return arc(node.radius, itemNumber, 1)();
       }
     });
-    text = textpath.enter().append('text').classed('context-menu-item', true).text(textValue).attr("transform", "scale(0.1)").attr({
+    text = textpath.enter().append('text').classed('context-menu-item', true).classed(className, true)
+      .text(textValue).attr("transform", "scale(0.1)").attr({
       fill: function(node) {
         return '#FFFFFF';
       },
