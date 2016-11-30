@@ -75,7 +75,7 @@ public class MovieService {
                     nodes.add(actor);
                     source = i++;
                 }
-                rels.add(map("source",source,"target",target));
+                rels.add(map("source",source,"target",target, "type", "ACTED_IN"));
             }
         }
         return map("nodes", nodes, "links", rels);

@@ -10,3 +10,8 @@ target
 *.class
 *.jar
 *.pyc
+
+.DS_Store
+*.swp
+neod3*js
+movies.js

@@ -33,7 +33,8 @@ neo.utils = {
 
 // Renderers
 neo.renderers = {
-  node: [],
+  movieNode: [],
+  actorNode: [],
   relationship: [],
   menu: []
 };
@@ -60,10 +61,24 @@ neo.Renderer = (function() {
 // Node
 //
 neo.models.Node = (function() {
-  function Node (id, label, title) {
+  function Node(id, labels, properties) {
+    var key, value;
     this.id = id;
-    this.label = label;
-    this.title = title;
+    this.labels = labels;
+    this.propertyMap = properties;
+    this.propertyList = (function() {
+      var results;
+      results = [];
+      for (key in properties) {
+        if (!hasProp.call(properties, key)) continue;
+        value = properties[key];
+        results.push({
+          key: key,
+          value: value
+        });
+      }
+      return results;
+    })();
   }
 
   return Node;
@@ -123,6 +138,48 @@ neo.models.Graph = (function() {
     return this._relationships;
   }
 
+  Graph.prototype.groupedRelationships = function() {
+    var NodePair, groups, i, ignored, len, nodePair, pair, ref, ref1, relationship, results;
+    NodePair = (function() {
+      function NodePair(node1, node2) {
+        this.relationships = [];
+        if (node1.id < node2.id) {
+          this.nodeA = node1;
+          this.nodeB = node2;
+        } else {
+          this.nodeA = node2;
+          this.nodeB = node1;
+        }
+      }
+
+      NodePair.prototype.isLoop = function() {
+        return this.nodeA === this.nodeB;
+      };
+
+      NodePair.prototype.toString = function() {
+        return this.nodeA.id + ":" + this.nodeB.id;
+      };
+
+      return NodePair;
+
+    })();
+    groups = {};
+    ref = this._relationships;
+    for (i = 0, len = ref.length; i < len; i++) {
+      relationship = ref[i];
+      nodePair = new NodePair(relationship.source, relationship.target);
+      nodePair = (ref1 = groups[nodePair]) != null ? ref1 : nodePair;
+      nodePair.relationships.push(relationship);
+      groups[nodePair] = nodePair;
+    }
+    results = [];
+    for (ignored in groups) {
+      pair = groups[ignored];
+      results.push(pair);
+    }
+    return results;
+  };
+
   //
   // Add nodes
   //
@@ -172,6 +229,54 @@ neo.models.Graph = (function() {
 })();
 
 //
+// Define collision detection
+//
+var aaron = true;
+neo.collision = (function() {
+  var collide, collision;
+  collision = {};
+  collide = function(node) {
+    var nx1, nx2, ny1, ny2, r;
+    r = node.radius + 10;
+    nx1 = node.x - r;
+    nx2 = node.x + r;
+    ny1 = node.y - r;
+    ny2 = node.y + r;
+    return function(quad, x1, y1, x2, y2) {
+      var l, x, y;
+      if (quad.point && (quad.point !== node)) {
+        if (isNaN(quad.point.x) || isNaN(quad.point.y)) {
+          return false;
+        }
+        x = node.x - quad.point.x;
+        y = node.y - quad.point.y;
+        l = Math.sqrt(x * x + y * y);
+        r = node.radius + 4 + quad.point.radius;
+      }
+      if (l < r) {
+        l = (l - r) / l * .5;
+        node.x -= x *= l;
+        node.y -= y *= l;
+        quad.point.x += x;
+        quad.point.y += y;
+      }
+      return x1 > nx2 || x2 < nx1 || y1 > ny2 || y2 < ny1;
+    };
+  };
+  collision.avoidOverlap = function(nodes) {
+    var i, len, n, q, results;
+    q = d3.geom.quadtree(nodes);
+    results = [];
+    for (i = 0, len = nodes.length; i < len; i++) {
+      n = nodes[i];
+      results.push(q.visit(collide(n)));
+    }
+    return results;
+  };
+  return collision;
+})();
+
+//
 // Define layout
 //
 neo.layout = (function() {
@@ -181,29 +286,69 @@ neo.layout = (function() {
     var _force;
     _force = {};
     _force.init = function(render) {
-      var forceLayout, d3force, accelerateLayout;
+      var forceLayout, d3force, accelerateLayout, currentStats;
       forceLayout = {};
-      linkDistance = 45;
-      d3force = d3.layout.force().linkDistance(
-          linkDistance
-      ).charge(-1000);
+      linkDistance = 10;
+      d3force = d3.layout.force().linkDistance(function(relationship) {
+        return relationship.source.radius + relationship.target.radius + linkDistance;
+      }).charge(-2000);
+      newStatsBucket = function() {
+        var bucket;
+        bucket = {
+          layoutTime: 0,
+          layoutSteps: 0
+        };
+        return bucket;
+      };
+      //currentStats = newStatsBucket();
       accelerateLayout = function() {
-        var d3Tick;
+        var d3Tick, maxAnimationFramesPerSecond, maxComputeTime, maxStepsPerTick, now;
+        maxStepsPerTick = 10;
+        maxAnimationFramesPerSecond = 60;
+        maxComputeTime = 2000 / maxAnimationFramesPerSecond;
+        now = window.performance && window.performance.now ? function() {
+          return window.performance.now();
+        } : function() {
+          return Date.now();
+        };
         d3Tick = d3force.tick;
         return d3force.tick = function() {
-          // TODO: collision detection
-          if (d3Tick()){
-            return true;
+          var startCalcs, startTick, step;
+          startTick = now();
+          step = maxStepsPerTick;
+          while (step-- && now() - startTick < maxComputeTime) {
+            startCalcs = now();
+            neo.collision.avoidOverlap(d3force.nodes());
+            if (d3Tick()) {
+              maxStepsPerTick = 2;
+              return true;
+            }
           }
           render();
           return false;
         }
       }
       accelerateLayout();
+      oneRelationshipPerPairOfNodes = function(graph) {
+        var i, len, pair, ref, results;
+        ref = graph.groupedRelationships();
+        results = [];
+        for (i = 0, len = ref.length; i < len; i++) {
+          pair = ref[i];
+          results.push(pair.relationships[0]);
+        }
+        return results;
+      };
       forceLayout.update = function(graph, size) {
-        var nodes, relationships;
-        nodes = graph.nodes();
-        relationships = graph.relationships();
+        var center, nodes, radius, relationships;
+        nodes = neo.utils.cloneArray(graph.nodes());
+        relationships = oneRelationshipPerPairOfNodes(graph);
+        radius = nodes.length * linkDistance / (Math.PI * 2);
+        center = {
+          x: size[0] / 2,
+          y: size[1] / 2
+        };
+        neo.utils.circularLayout(nodes, center, radius);
         return d3force.nodes(nodes).links(relationships).size(size).start();
       };
       forceLayout.drag = d3force.drag;
@@ -214,11 +359,135 @@ neo.layout = (function() {
   return _layout;
 })();
 
+NeoD3Geometry = (function() {
+  var addShortenedNextWord, fitCaptionIntoCircle, noEmptyLines, square;
+
+  square = function(distance) {
+    return distance * distance;
+  };
+
+  function NeoD3Geometry(style1) {
+    this.style = style1;
+  }
+
+  addShortenedNextWord = function(line, word, measure) {
+    var results;
+    results = [];
+    while (!(word.length <= 2)) {
+      word = word.substr(0, word.length - 2) + '\u2026';
+      if (measure(word) < line.remainingWidth) {
+        line.text += " " + word;
+        break;
+      } else {
+        results.push(void 0);
+      }
+    }
+    return results;
+  };
+
+  noEmptyLines = function(lines) {
+    var i, len, line;
+    for (i = 0, len = lines.length; i < len; i++) {
+      line = lines[i];
+      if (line.text.length === 0) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  fitCaptionIntoCircle = function(node) {
+    var candidateLines, candidateWords, captionText, consumedWords, emptyLine, fitOnFixedNumberOfLines, fontFamily, fontSize, i, lineCount, lineHeight, lines, maxLines, measure, ref, ref1, ref2, template, words, graphStyle;
+    template = '{id}';
+    graphStyle = new GraphStyle();
+    captionText = graphStyle.interpolate(template, node);
+    fontFamily = 'sans-serif';
+    fontSize = parseFloat("10px");
+    lineHeight = fontSize;
+    measure = function(text) {
+      return neo.utils.measureText(text, fontFamily, fontSize);
+    };
+    words = captionText.split(" ");
+    emptyLine = function(lineCount, iLine) {
+      var baseline, constainingHeight, lineWidth;
+      baseline = (1 + iLine - lineCount / 2) * lineHeight;
+      constainingHeight = iLine < lineCount / 2 ? baseline - lineHeight : baseline;
+      lineWidth = Math.sqrt(square(node.radius) - square(constainingHeight)) * 2;
+      return {
+        node: node,
+        text: '',
+        baseline: baseline,
+        remainingWidth: lineWidth
+      };
+    };
+    fitOnFixedNumberOfLines = function(lineCount) {
+      var i, iLine, iWord, line, lines, ref;
+      lines = [];
+      iWord = 0;
+      for (iLine = i = 0, ref = lineCount - 1; 0 <= ref ? i <= ref : i >= ref; iLine = 0 <= ref ? ++i : --i) {
+        line = emptyLine(lineCount, iLine);
+        while (iWord < words.length && measure(" " + words[iWord]) < line.remainingWidth) {
+          line.text += " " + words[iWord];
+          line.remainingWidth -= measure(" " + words[iWord]);
+          iWord++;
+        }
+        lines.push(line);
+      }
+      if (iWord < words.length) {
+        addShortenedNextWord(lines[lineCount - 1], words[iWord], measure);
+      }
+      return [lines, iWord];
+    };
+    consumedWords = 0;
+    maxLines = node.radius * 2 / fontSize;
+    lines = [emptyLine(1, 0)];
+    for (lineCount = i = 1, ref = maxLines; 1 <= ref ? i <= ref : i >= ref; lineCount = 1 <= ref ? ++i : --i) {
+      ref1 = fitOnFixedNumberOfLines(lineCount), candidateLines = ref1[0], candidateWords = ref1[1];
+      if (noEmptyLines(candidateLines)) {
+        ref2 = [candidateLines, candidateWords], lines = ref2[0], consumedWords = ref2[1];
+      }
+      if (consumedWords >= words.length) {
+        return lines;
+      }
+    }
+    return lines;
+  };
+
+  NeoD3Geometry.prototype.formatNodeCaptions = function(nodes) {
+    var i, len, node, results;
+    results = [];
+    for (i = 0, len = nodes.length; i < len; i++) {
+      node = nodes[i];
+      results.push(node.caption = fitCaptionIntoCircle(node));
+    }
+    return results;
+  };
+
+  NeoD3Geometry.prototype.setNodeRadii = function(nodes) {
+    var i, len, node, results;
+    results = [];
+    for (i = 0, len = nodes.length; i < len; i++) {
+      node = nodes[i];
+      results.push(node.radius = 50);
+    }
+    return results;
+  };
+
+  NeoD3Geometry.prototype.onGraphChange = function(graph) {
+    this.setNodeRadii(graph.nodes());
+    return this.formatNodeCaptions(graph.nodes());
+  };
+
+  return NeoD3Geometry;
+
+})();
+
 var slice = [].slice;
 
-neo.viz = function(elem, graph, layout) {
-  var viz, svg, force, render, ref, ref1, layoutDimension, width, height, onNodeClick, onNodeDblClick, onNodeMouseOut, onNodeMouseOver, clickHandler;
+neo.viz = function(elem, measureSize, graph, layout) {
+  var viz, svg, force, render, ref, ref1, layoutDimension, width, height, onNodeClick, onNodeDblClick, onNodeMouseOut, onNodeMouseOver, clickHandler, geometry;
   viz = {};
+  geometry = new NeoD3Geometry(null);
   svg = d3.select(elem).append("svg").attr("pointer-events", "all");
   width = window.innerWidth, height = window.innerHeight;
   svg.attr("width", width).attr("height", height);
@@ -249,11 +518,19 @@ neo.viz = function(elem, graph, layout) {
     nodeGroups = svg.selectAll('g.node').attr('transform', function(d) {
       return "translate(" + d.x + "," + d.y + ")";
     });
-    ref = neo.renderers.node;
+
+    ref = neo.renderers.movieNode;
     for (i = 0, len = ref.length; i < len; i++) {
       renderer = ref[i];
       nodeGroups.call(renderer.onTick, viz);
     }
+
+    ref = neo.renderers.actorNode;
+    for (i = 0, len = ref.length; i < len; i++) {
+      renderer = ref[i];
+      nodeGroups.call(renderer.onTick, viz);
+    }
+
     relationshipGroups = svg.selectAll('g.relationship');
     ref1 = neo.renderers.relationship;
     for (j = 0; j < ref1.length; j++) {
@@ -265,7 +542,7 @@ neo.viz = function(elem, graph, layout) {
   force = layout.init(render);
 
   viz.update = function() {
-    var layers, relationshipGroups, nodeGroups, ref, ref1, ref2;
+    var layers, relationshipGroups, nodeGroups, movieGroups, actorGroups, ref, ref1, ref2;
     layers = svg.selectAll("g.layer").data(["relationships", "nodes"]);
     layers.enter().append("g").attr("class", function(d) {
       return "layer " + d;
@@ -281,25 +558,35 @@ neo.viz = function(elem, graph, layout) {
       renderer = ref[i];
       relationshipGroups.call(renderer.onGraphChange, viz);
     }
+    geometry.onGraphChange(graph);
     relationshipGroups.exit().remove();
     nodeGroups = svg.select("g.layer.nodes").selectAll("g.node").data(nodes, function(d) {
       return d.id;
     });
-    nodeGroups.enter().append("g").attr("class", "node").call(force.drag).call(clickHandler).on('mouseover', onNodeMouseOver).on('mouseout', onNodeMouseOut);
+    nodeGroups.enter().append("g").attr("class", function(d) { return "node " + d.labels; }).call(force.drag).call(clickHandler).on('mouseover', onNodeMouseOver).on('mouseout', onNodeMouseOut);
     nodeGroups.classed("selected", function(node) {
       return node.selected;
     });
-    ref1 = neo.renderers.node;
+
+    movieGroups = svg.select("g.layer.nodes").selectAll("g.node.movie");
+    ref1 = neo.renderers.movieNode;
     for (j = 0, len1 = ref1.length; j < len1; j++) {
       renderer = ref1[j];
-      nodeGroups.call(renderer.onGraphChange, viz);
+      movieGroups.call(renderer.onGraphChange, viz);
     }
+
+    actorGroups = svg.select("g.layer.nodes").selectAll("g.node.actor");
+    ref1 = neo.renderers.actorNode;
+    for (j = 0, len1 = ref1.length; j < len1; j++) {
+      renderer = ref1[j];
+      actorGroups.call(renderer.onGraphChange, viz);
+    }
+
     ref2 = neo.renderers.menu;
     for (k = 0, len2 = ref2.length; k < len2; k++) {
       renderer = ref2[k];
       nodeGroups.call(renderer.onGraphChange, viz);
     }
-    nodeGroups.exit().remove();
     nodeGroups.exit().remove();
     force.update(graph, [300, 300]);
     return true;
@@ -311,11 +598,11 @@ neo.viz = function(elem, graph, layout) {
 }
 
 neo.GraphView = (function() {
-  function graphView(graph) {
+  function graphView(element, measureSize, graph) {
     var callbacks;
     this.layout = neo.layout.force();
     this.graph = graph;
-    this.viz = neo.viz('#graph', this.graph, this.layout);
+    this.viz = neo.viz(element, measureSize, this.graph, this.layout);
     this.callbacks = {};
     callbacks = this.callbacks;
     this.viz.trigger = (function() {
@@ -350,7 +637,10 @@ neo.GraphView = (function() {
 var GraphConverter = function(){};
 GraphConverter.convertNode = function(node, idx){
     node.id = idx;
-    return new neo.models.Node(node.id, node.label, node.title);
+    node.properties = {};
+    node.properties["id"] = node.title;
+    node.properties["title"] = node.title;
+    return new neo.models.Node(node.id, node.label, node.properties);
 };
 
 GraphConverter.convertRelationship = function(graph) {
@@ -378,9 +668,17 @@ var GetGraph = function(response) {
 
 var d3callback = function(error, response) {
   if (error) return;
-  var graph, graphView, nodeClicked, toggleSelection, selectedItem;
+  var graph, graphView, nodeClicked, toggleSelection, selectedItem, $element,
+    measureSize;
   graph = GetGraph(response);
-  graphView = new neo.GraphView(graph);
+  $element = $('#graph');
+  measureSize = function() {
+    return {
+      width: $element.width(),
+      height: $element.height()
+    };
+  };
+  graphView = new neo.GraphView($element[0], measureSize, graph);
   selectedItem = null;
   toggleSelection = (function(_this) {
     return function(d) {
@@ -413,7 +711,7 @@ var d3callback = function(error, response) {
     return d.contextMenuEvent = false;
   }).on('nodeClose', function(d) {
     d.contextMenuEvent = true;
-    GraphExplorer.removeNodesAndRelationships(d, graph);
+    window.open('http://stackoverflow.com/', '_blank')
     return toggleSelection(d);
   }).on('nodeUnlock', function(d) {
     d.contextMenuEvent = true;
@@ -425,9 +723,6 @@ var d3callback = function(error, response) {
       return;
     }
     getNodeNeigbours(d);
-    //if (!$rootScope.$$phase) {
-    //  return $rootScope.$apply();
-    //}
   })
   graphView.update();
 }
@@ -438,7 +733,7 @@ d3.json("/graph", d3callback);
 (function() {
   var nodeOutline, nodeIcon, noop, nodeCaption, relLink;
   noop = function() {};
-  nodeOutline = new neo.Renderer({
+  circleNodeOutline = new neo.Renderer({
     onGraphChange: function(selection, viz) {
       var circles;
       circles = selection.selectAll('circle.outline').data(function(node) {
@@ -450,7 +745,7 @@ d3.json("/graph", d3callback);
       });
       circles.attr({
         r: function(node) {
-          return node.radius = 29;
+          return node.radius = 50;
         },
         fill: function(node) {
           return "#68BDF6";
@@ -466,21 +761,77 @@ d3.json("/graph", d3callback);
     },
     onTick: noop
   });
+  rectNodeOutline = new neo.Renderer({
+    onGraphChange: function(selection, viz) {
+      var rects;
+      rects = selection.selectAll('rect.outline').data(function(node) {
+        return [node];
+      });
+      rects.enter().append('rect').classed('outline', true).attr({
+        width: function(node) { return node.side = 80; },
+        height: function(node) { return node.side; },
+        x: function(node) { return -node.side / 2; },
+        y: function(node) { return -node.side / 2; }
+      });
+      rects.attr({
+        r: function(node) {
+          return node.radius = node.side * Math.sqrt(2) / 2; 
+        },
+        fill: function(node) {
+          return "#6DCE9E";
+        },
+        stroke: function(node) {
+          return "#60B58B";
+        },
+        'stroke-width': function(node) {
+          return "2px";
+        }
+      });
+      return rects.exit().remove();
+    },
+    onTick: noop
+  });
+  //nodeCaption = new neo.Renderer({
+  //  onGraphChange: function(selection, viz) {
+  //    var text;
+  //    text = selection.selectAll('text').data(function(node) {
+  //      return [node];
+  //    });
+  //    text.enter().append('text').attr({
+  //      'text-anchor': 'middle'
+  //    }).attr({
+  //      'pointer-events': 'none'
+  //    });
+  //    text.text(function(node) {
+  //      return node.propertyMap["id"];
+  //    }).attr('y', function(line) {
+  //      return 0;
+  //    }).attr('font-size', function(line) {
+  //      return "10px";
+  //    }).attr({
+  //      'fill': function(line) {
+  //        return "#FFFFFF";
+  //      }
+  //    });
+  //    return text.exit().remove();
+  //  },
+  //  onTick: noop
+  //});
   nodeCaption = new neo.Renderer({
     onGraphChange: function(selection, viz) {
       var text;
-      text = selection.selectAll('text').data(function(node) {
-        return [node];
+      text = selection.selectAll('text.caption').data(function(node) {
+        return node.caption;
       });
-      text.enter().append('text').attr({
+      text.enter().append('text').classed('caption', true).attr({
         'text-anchor': 'middle'
       }).attr({
         'pointer-events': 'none'
       });
-      text.text(function(node) {
-        return node.title;
+      text.text(function(line) {
+        return line.text;
       }).attr('y', function(line) {
-        return 0;
+        return line.baseline;
       }).attr('font-size', function(line) {
         return "10px";
       }).attr({
@@ -528,8 +879,10 @@ d3.json("/graph", d3callback);
         .attr('y2', function(rel) { return rel.target.y });
     }
   });
-  neo.renderers.node.push(nodeOutline);
-  neo.renderers.node.push(nodeCaption);
+  neo.renderers.movieNode.push(rectNodeOutline);
+  neo.renderers.movieNode.push(nodeCaption);
+  neo.renderers.actorNode.push(circleNodeOutline);
+  neo.renderers.actorNode.push(nodeCaption);
   neo.renderers.relationship.push(relLink);
 })();
 
@@ -540,7 +893,7 @@ d3.json("/graph", d3callback);
   arc = function(radius, itemNumber, width) {
     var endAngle, innerRadius, startAngle;
     if (width == null) {
-      width = 30;
+      width = 50;
     }
     itemNumber = itemNumber - 1;
     startAngle = ((2 * Math.PI) / numberOfItemsInContextMenu) * itemNumber;
@@ -592,7 +945,6 @@ d3.json("/graph", d3callback);
       }
     });
     text = textpath.enter().append('text').classed('context-menu-item', true).text(textValue).attr("transform", "scale(0.1)").attr({
-      'font-family': 'FontAwesome',
       fill: function(node) {
         return '#FFFFFF';
       },
@@ -619,19 +971,19 @@ d3.json("/graph", d3callback);
   };
   donutRemoveNode = new neo.Renderer({
     onGraphChange: function(selection, viz) {
-      return createMenuItem(selection, viz, 'nodeClose', 1, 'remove_node', [-4, 0], '\uf00d', 'Remove node from the visualization');
+      return createMenuItem(selection, viz, 'nodeClose', 1, 'remove_node', [-4, 0], 'r', 'Remove node from the visualization');
     },
     onTick: noop
   });
   donutExpandNode = new neo.Renderer({
     onGraphChange: function(selection, viz) {
-      return createMenuItem(selection, viz, 'nodeDblClicked', 2, 'expand_node', [0, 4], '\uf0b2', 'Expand child relationships');
+      return createMenuItem(selection, viz, 'nodeDblClicked', 2, 'expand_node', [0, 4], 'e', 'Expand child relationships');
     },
     onTick: noop
   });
   donutUnlockNode = new neo.Renderer({
     onGraphChange: function(selection, viz) {
-      return createMenuItem(selection, viz, 'nodeUnlock', 3, 'unlock_node', [4, 0], '\uf09c', 'Unlock the node to re-layout the graph');
+      return createMenuItem(selection, viz, 'nodeUnlock', 3, 'unlock_node', [4, 0], 'u', 'Unlock the node to re-layout the graph');
     },
     onTick: noop
   });
@@ -678,3 +1030,89 @@ neo.utils.clickHandler = function() {
   return d3.rebind(cc, event, "on");
 };
 
+neo.utils.circularLayout = function(nodes, center, radius) {
+  var i, j, k, len, len1, n, node, results, unlocatedNodes;
+  unlocatedNodes = [];
+  for (j = 0, len = nodes.length; j < len; j++) {
+    node = nodes[j];
+    if (!((node.x != null) && (node.y != null))) {
+      unlocatedNodes.push(node);
+    }
+  }
+  results = [];
+  for (i = k = 0, len1 = unlocatedNodes.length; k < len1; i = ++k) {
+    n = unlocatedNodes[i];
+    n.x = center.x + radius * Math.sin(2 * Math.PI * i / unlocatedNodes.length);
+    results.push(n.y = center.y + radius * Math.cos(2 * Math.PI * i / unlocatedNodes.length));
+  }
+  return results;
+};
+
+neo.utils.cloneArray = function(original) {
+  var clone, i, idx, len, node;
+  clone = new Array(original.length);
+  for (idx = i = 0, len = original.length; i < len; idx = ++i) {
+    node = original[idx];
+    clone[idx] = node;
+  }
+  return clone;
+};
+
+GraphStyle = (function() {
+    function GraphStyle(storage1) {
+      this.storage = storage1;
+    }
+  GraphStyle.prototype.interpolate = function(str, item) {
+    return str.replace(/\{([^{}]*)\}/g, function(a, b) {
+      var r;
+      r = item.propertyMap['id'];
+      if (typeof r === 'string' || typeof r === 'number') {
+        return r;
+      } else {
+        return a;
+      }
+    });
+  };
+
+  return GraphStyle;
+})();
+
+neo.utils.measureText = (function() {
+  var cache, measureUsingCanvas;
+  measureUsingCanvas = function(text, font) {
+    var canvas, canvasSelection, context;
+    canvasSelection = d3.select('canvas#textMeasurementCanvas').data([this]);
+    canvasSelection.enter().append('canvas').attr('id', 'textMeasurementCanvas').style('display', 'none');
+    canvas = canvasSelection.node();
+    context = canvas.getContext('2d');
+    context.font = font;
+    return context.measureText(text).width;
+  };
+  cache = (function() {
+    var cacheSize, list, map;
+    cacheSize = 10000;
+    map = {};
+    list = [];
+    return function(key, calc) {
+      var cached, result;
+      cached = map[key];
+      if (cached) {
+        return cached;
+      } else {
+        result = calc();
+        if (list.length > cacheSize) {
+          delete map[list.splice(0, 1)];
+          list.push(key);
+        }
+        return map[key] = result;
+      }
+    };
+  })();
+  return function(text, fontFamily, fontSize) {
+    var font;
+    font = 'normal normal normal ' + fontSize + 'px/normal ' + fontFamily;
+    return cache(text + font, function() {
+      return measureUsingCanvas(text, font);
+    });
+  };
+})();
