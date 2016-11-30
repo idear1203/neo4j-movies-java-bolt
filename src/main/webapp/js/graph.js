@@ -2,17 +2,18 @@
 
 // TODO:
 // 1. Style selection
-// 2. Multiple relationships between adjacent nodes
+// 2. multiple relationships between adjacent nodes
+// 3. Collision dection
 
 var hasProp = {}.hasOwnProperty;
-var explorer = {};
-explorer.models = {};
+var neo = {};
+neo.models = {};
 
 // Utils
-explorer.utils = {
+neo.utils = {
   extend: function(dest, src) {
     var k, v;
-    if (!explorer.utils.isObject(dest) && explorer.utils.isObject(src)) {
+    if (!neo.utils.isObject(dest) && neo.utils.isObject(src)) {
       return;
     }
     for (k in src) {
@@ -31,18 +32,19 @@ explorer.utils = {
 };
 
 // Renderers
-explorer.renderers = {
+neo.renderers = {
   node: [],
-  relationship: []
+  relationship: [],
+  menu: []
 };
 
 // Render
-explorer.Renderer = (function() {
+neo.Renderer = (function() {
   function Renderer(opts) {
     if (opts == null) {
       opts = {};
     }
-    explorer.utils.extend(this, opts);
+    neo.utils.extend(this, opts);
     if (this.onGraphChange == null) {
       this.onGraphChange = function() {};
     }
@@ -52,13 +54,12 @@ explorer.Renderer = (function() {
   }
 
   return Renderer;
-
 })();
 
 //
 // Node
 //
-explorer.models.Node = (function() {
+neo.models.Node = (function() {
   function Node (id, label, title) {
     this.id = id;
     this.label = label;
@@ -71,11 +72,12 @@ explorer.models.Node = (function() {
 //
 // Relationship
 //
-explorer.models.Relationship = (function() {
-  function Relationship (id, source, target) {
+neo.models.Relationship = (function() {
+  function Relationship (id, source, target, type) {
     this.id = id;
     this.source = source;
     this.target = target;
+    this.type = type;
   }
 
   return Relationship;
@@ -84,7 +86,7 @@ explorer.models.Relationship = (function() {
 //
 // Graph
 //
-explorer.models.Graph = (function() {
+neo.models.Graph = (function() {
   function Graph() {
     //
     // Map id -> node
@@ -172,7 +174,7 @@ explorer.models.Graph = (function() {
 //
 // Define layout
 //
-explorer.layout = (function() {
+neo.layout = (function() {
   var _layout;
   _layout = {};
   _layout.force = function() {
@@ -212,8 +214,10 @@ explorer.layout = (function() {
   return _layout;
 })();
 
-explorer.viz = function(elem, graph, layout) {
-  var viz, svg, force, render, ref, ref1, layoutDimension, width, height;
+var slice = [].slice;
+
+neo.viz = function(elem, graph, layout) {
+  var viz, svg, force, render, ref, ref1, layoutDimension, width, height, onNodeClick, onNodeDblClick, onNodeMouseOut, onNodeMouseOver, clickHandler;
   viz = {};
   svg = d3.select(elem).append("svg").attr("pointer-events", "all");
   width = window.innerWidth, height = window.innerHeight;
@@ -223,18 +227,35 @@ explorer.viz = function(elem, graph, layout) {
     var args, event;
     event = arguments[0], args = 2 <= arguments.length ? slice.call(arguments, 1) : [];
   };
+  onNodeClick = (function(_this) {
+    return function(node) {
+      updateViz = false;
+      return viz.trigger('nodeClicked', node);
+    };
+  })(this);
+  onNodeDblClick = (function(_this) {
+    return function(node) {
+      return viz.trigger('nodeDblClicked', node);
+    };
+  })(this);
+  onNodeMouseOver = function(node) {
+    return viz.trigger('nodeMouseOver', node);
+  };
+  onNodeMouseOut = function(node) {
+    return viz.trigger('nodeMouseOut', node);
+  };
   render = function() {
     var i, j, nodeGroups, relationshipGroups, ref, ref1;
     nodeGroups = svg.selectAll('g.node').attr('transform', function(d) {
       return "translate(" + d.x + "," + d.y + ")";
     });
-    ref = explorer.renderers.node;
+    ref = neo.renderers.node;
     for (i = 0, len = ref.length; i < len; i++) {
       renderer = ref[i];
       nodeGroups.call(renderer.onTick, viz);
     }
     relationshipGroups = svg.selectAll('g.relationship');
-    ref1 = explorer.renderers.relationship;
+    ref1 = neo.renderers.relationship;
     for (j = 0; j < ref1.length; j++) {
       renderer = ref1[j];
       relationshipGroups.call(renderer.onTick, viz);
@@ -244,7 +265,7 @@ explorer.viz = function(elem, graph, layout) {
   force = layout.init(render);
 
   viz.update = function() {
-    var layers, relationshipGroups, nodeGroups;
+    var layers, relationshipGroups, nodeGroups, ref, ref1, ref2;
     layers = svg.selectAll("g.layer").data(["relationships", "nodes"]);
     layers.enter().append("g").attr("class", function(d) {
       return "layer " + d;
@@ -255,7 +276,7 @@ explorer.viz = function(elem, graph, layout) {
       return d.id; // Why not just provide data?
     });
     relationshipGroups.enter().append("g").attr("class", "relationship");
-    ref = explorer.renderers.relationship;
+    ref = neo.renderers.relationship;
     for (i = 0, len = ref.length; i < len; i++) {
       renderer = ref[i];
       relationshipGroups.call(renderer.onGraphChange, viz);
@@ -264,25 +285,59 @@ explorer.viz = function(elem, graph, layout) {
     nodeGroups = svg.select("g.layer.nodes").selectAll("g.node").data(nodes, function(d) {
       return d.id;
     });
-    nodeGroups.enter().append("g").attr("class", "node").call(force.drag);
-    ref1 = explorer.renderers.node;
+    nodeGroups.enter().append("g").attr("class", "node").call(force.drag).call(clickHandler).on('mouseover', onNodeMouseOver).on('mouseout', onNodeMouseOut);
+    nodeGroups.classed("selected", function(node) {
+      return node.selected;
+    });
+    ref1 = neo.renderers.node;
     for (j = 0, len1 = ref1.length; j < len1; j++) {
       renderer = ref1[j];
       nodeGroups.call(renderer.onGraphChange, viz);
     }
+    ref2 = neo.renderers.menu;
+    for (k = 0, len2 = ref2.length; k < len2; k++) {
+      renderer = ref2[k];
+      nodeGroups.call(renderer.onGraphChange, viz);
+    }
+    nodeGroups.exit().remove();
     nodeGroups.exit().remove();
     force.update(graph, [300, 300]);
     return true;
   };
+  clickHandler = neo.utils.clickHandler();
+  clickHandler.on('click', onNodeClick);
+  clickHandler.on('dblclick', onNodeDblClick);
   return viz;
 }
 
-explorer.GraphView = (function() {
+neo.GraphView = (function() {
   function graphView(graph) {
-    this.layout = explorer.layout.force();
+    var callbacks;
+    this.layout = neo.layout.force();
     this.graph = graph;
-    this.viz = explorer.viz('#graph', this.graph, this.layout);
+    this.viz = neo.viz('#graph', this.graph, this.layout);
+    this.callbacks = {};
+    callbacks = this.callbacks;
+    this.viz.trigger = (function() {
+      return function() {
+        var args, callback, event, i, len, ref, results;
+        event = arguments[0], args = 2 <= arguments.length ? slice.call(arguments, 1) : [];
+        ref = callbacks[event] || [];
+        results = [];
+        for (i = 0, len = ref.length; i < len; i++) {
+          callback = ref[i];
+          results.push(callback.apply(null, args));
+        }
+        return results;
+      };
+    })();
   }
+
+  graphView.prototype.on = function(event, callback) {
+    var base;
+    ((base = this.callbacks)[event] != null ? base[event] : base[event] = []).push(callback);
+    return this;
+  };
 
   graphView.prototype.update = function() {
     this.viz.update();
@@ -295,7 +350,7 @@ explorer.GraphView = (function() {
 var GraphConverter = function(){};
 GraphConverter.convertNode = function(node, idx){
     node.id = idx;
-    return new explorer.models.Node(node.id, node.label, node.title);
+    return new neo.models.Node(node.id, node.label, node.title);
 };
 
 GraphConverter.convertRelationship = function(graph) {
@@ -304,14 +359,14 @@ GraphConverter.convertRelationship = function(graph) {
     source = graph.findNode(relationship.source);
     target = graph.findNode(relationship.target);
     relationship.id = idx;
-    return new explorer.models.Relationship(relationship.id, source, target);
+    return new neo.models.Relationship(relationship.id, source, target, relationship.type);
   }
 };
 
 var GetGraph = function(response) {
   var graph, nodes, relationships;
   console.log(response);
-  graph = new explorer.models.Graph(); 
+  graph = new neo.models.Graph(); 
   
   // Convert response data to graph models
   nodes = response.nodes.map(GraphConverter.convertNode);
@@ -323,8 +378,57 @@ var GetGraph = function(response) {
 
 var d3callback = function(error, response) {
   if (error) return;
-  var graph = GetGraph(response);
-  var graphView = new explorer.GraphView(graph);
+  var graph, graphView, nodeClicked, toggleSelection, selectedItem;
+  graph = GetGraph(response);
+  graphView = new neo.GraphView(graph);
+  selectedItem = null;
+  toggleSelection = (function(_this) {
+    return function(d) {
+      if (d === selectedItem) {
+        if (d != null) {
+          d.selected = false;
+        }
+        selectedItem = null;
+      } else {
+        if (selectedItem != null) {
+          selectedItem.selected = false;
+        }
+        if (d != null) {
+          d.selected = true;
+        }
+        selectedItem = d;
+      }
+      graphView.update();
+      return null;
+    };
+  })(this);
+  nodeClicked = function(d) {
+    d.fixed = true;
+    return toggleSelection(d);
+  };
+  graphView.on('nodeClicked', function(d) {
+    if (!d.contextMenuEvent) {
+      nodeClicked(d);
+    }
+    return d.contextMenuEvent = false;
+  }).on('nodeClose', function(d) {
+    d.contextMenuEvent = true;
+    GraphExplorer.removeNodesAndRelationships(d, graph);
+    return toggleSelection(d);
+  }).on('nodeUnlock', function(d) {
+    d.contextMenuEvent = true;
+    d.fixed = false;
+    return toggleSelection(null);
+  }).on('nodeDblClicked', function(d) {
+    d.minified = false;
+    if (d.expanded) {
+      return;
+    }
+    getNodeNeigbours(d);
+    //if (!$rootScope.$$phase) {
+    //  return $rootScope.$apply();
+    //}
+  })
   graphView.update();
 }
 
@@ -332,9 +436,9 @@ d3.json("/graph", d3callback);
 
 // Concrete Renderers
 (function() {
-  var nodeOutline, nodeIcon, noop;
+  var nodeOutline, nodeIcon, noop, nodeCaption, relLink;
   noop = function() {};
-  nodeOutline = new explorer.Renderer({
+  nodeOutline = new neo.Renderer({
     onGraphChange: function(selection, viz) {
       var circles;
       circles = selection.selectAll('circle.outline').data(function(node) {
@@ -362,7 +466,7 @@ d3.json("/graph", d3callback);
     },
     onTick: noop
   });
-  nodeCaption = new explorer.Renderer({
+  nodeCaption = new neo.Renderer({
     onGraphChange: function(selection, viz) {
       var text;
       text = selection.selectAll('text').data(function(node) {
@@ -388,7 +492,7 @@ d3.json("/graph", d3callback);
     },
     onTick: noop
   });
-  arrowPath = new explorer.Renderer({
+  arrowPath = new neo.Renderer({
     name: 'arrowPath',
     onGraphChange: function(selection, viz) {
       var paths;
@@ -403,22 +507,7 @@ d3.json("/graph", d3callback);
     },
     onTick: noop
   });
-  arrowPath = new explorer.Renderer({
-    name: 'arrowPath',
-    onGraphChange: function(selection, viz) {
-      var paths;
-      paths = selection.selectAll('path.outline').data(function(rel) {
-        return [rel];
-      });
-      paths.enter().append('path').classed('outline', true);
-      paths.attr('fill', function(rel) {
-        return "#6DCE9E";
-      }).attr('stroke', 'none');
-      return paths.exit().remove();
-    },
-    onTick: noop
-  });
-  relLink = new explorer.Renderer({
+  relLink = new neo.Renderer({
     name: 'relLink',
     onGraphChange: function(selection, viz) {
       var links;
@@ -439,7 +528,153 @@ d3.json("/graph", d3callback);
         .attr('y2', function(rel) { return rel.target.y });
     }
   });
-  explorer.renderers.node.push(nodeOutline);
-  explorer.renderers.node.push(nodeCaption);
-  return explorer.renderers.relationship.push(relLink);
+  neo.renderers.node.push(nodeOutline);
+  neo.renderers.node.push(nodeCaption);
+  neo.renderers.relationship.push(relLink);
 })();
+
+(function() {
+  var arc, attachContextEvent, createMenuItem, donutExpandNode, donutRemoveNode, donutUnlockNode, getSelectedNode, noop, numberOfItemsInContextMenu;
+  noop = function() {};
+  numberOfItemsInContextMenu = 3;
+  arc = function(radius, itemNumber, width) {
+    var endAngle, innerRadius, startAngle;
+    if (width == null) {
+      width = 30;
+    }
+    itemNumber = itemNumber - 1;
+    startAngle = ((2 * Math.PI) / numberOfItemsInContextMenu) * itemNumber;
+    endAngle = startAngle + ((2 * Math.PI) / numberOfItemsInContextMenu);
+    innerRadius = Math.max(radius + 8, 20);
+    return d3.svg.arc().innerRadius(innerRadius).outerRadius(innerRadius + width).startAngle(startAngle).endAngle(endAngle).padAngle(.03);
+  };
+  getSelectedNode = function(node) {
+    if (node.selected) {
+      return [node];
+    } else {
+      return [];
+    }
+  };
+  attachContextEvent = function(event, elems, viz, content, label) {
+    var elem, i, len, results;
+    results = [];
+    for (i = 0, len = elems.length; i < len; i++) {
+      elem = elems[i];
+      elem.on('mousedown.drag', function() {
+        d3.event.stopPropagation();
+        return null;
+      });
+      elem.on('mouseup', function(node) {
+        return viz.trigger(event, node);
+      });
+      elem.on('mouseover', function(node) {
+        node.contextMenu = {
+          menuSelection: event,
+          menuContent: content,
+          label: label
+        };
+        return viz.trigger('menuMouseOver', node);
+      });
+      results.push(elem.on('mouseout', function(node) {
+        delete node.contextMenu;
+        return viz.trigger('menuMouseOut', node);
+      }));
+    }
+    return results;
+  };
+  createMenuItem = function(selection, viz, eventName, itemNumber, className, position, textValue, helpValue) {
+    var path, tab, text, textpath;
+    path = selection.selectAll('path.' + className).data(getSelectedNode);
+    textpath = selection.selectAll('text.' + className).data(getSelectedNode);
+    tab = path.enter().append('path').classed(className, true).classed('context-menu-item', true).attr({
+      d: function(node) {
+        return arc(node.radius, itemNumber, 1)();
+      }
+    });
+    text = textpath.enter().append('text').classed('context-menu-item', true).text(textValue).attr("transform", "scale(0.1)").attr({
+      'font-family': 'FontAwesome',
+      fill: function(node) {
+        return '#FFFFFF';
+      },
+      x: function(node) {
+        return arc(node.radius, itemNumber).centroid()[0] + position[0];
+      },
+      y: function(node) {
+        return arc(node.radius, itemNumber).centroid()[1] + position[1];
+      }
+    });
+    attachContextEvent(eventName, [tab, text], viz, helpValue, textValue);
+    tab.transition().duration(200).attr({
+      d: function(node) {
+        return arc(node.radius, itemNumber)();
+      }
+    });
+    text.attr("transform", "scale(1)");
+    path.exit().transition().duration(200).attr({
+      d: function(node) {
+        return arc(node.radius, itemNumber, 1)();
+      }
+    }).remove();
+    return textpath.exit().attr("transform", "scale(0)").remove();
+  };
+  donutRemoveNode = new neo.Renderer({
+    onGraphChange: function(selection, viz) {
+      return createMenuItem(selection, viz, 'nodeClose', 1, 'remove_node', [-4, 0], '\uf00d', 'Remove node from the visualization');
+    },
+    onTick: noop
+  });
+  donutExpandNode = new neo.Renderer({
+    onGraphChange: function(selection, viz) {
+      return createMenuItem(selection, viz, 'nodeDblClicked', 2, 'expand_node', [0, 4], '\uf0b2', 'Expand child relationships');
+    },
+    onTick: noop
+  });
+  donutUnlockNode = new neo.Renderer({
+    onGraphChange: function(selection, viz) {
+      return createMenuItem(selection, viz, 'nodeUnlock', 3, 'unlock_node', [4, 0], '\uf09c', 'Unlock the node to re-layout the graph');
+    },
+    onTick: noop
+  });
+  neo.renderers.menu.push(donutExpandNode);
+  neo.renderers.menu.push(donutRemoveNode);
+  return neo.renderers.menu.push(donutUnlockNode);
+})();
+
+neo.utils.clickHandler = function() {
+  var cc, event;
+  cc = function(selection) {
+    var dist, down, tolerance, wait;
+    dist = function(a, b) {
+      return Math.sqrt(Math.pow(a[0] - b[0], 2), Math.pow(a[1] - b[1], 2));
+    };
+    down = void 0;
+    tolerance = 5;
+    wait = null;
+    selection.on("mousedown", function() {
+      d3.event.target.__data__.fixed = true;
+      down = d3.mouse(document.body);
+      return d3.event.stopPropagation();
+    });
+    return selection.on("mouseup", function() {
+      if (dist(down, d3.mouse(document.body)) > tolerance) {
+
+      } else {
+        if (wait) {
+          window.clearTimeout(wait);
+          wait = null;
+          return event.dblclick(d3.event.target.__data__);
+        } else {
+          event.click(d3.event.target.__data__);
+          return wait = window.setTimeout((function(e) {
+            return function() {
+              return wait = null;
+            };
+          })(d3.event), 250);
+        }
+      }
+    });
+  };
+  event = d3.dispatch("click", "dblclick");
+  return d3.rebind(cc, event, "on");
+};
+
