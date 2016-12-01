@@ -1,4 +1,4 @@
-.context-menu-item, .outline {
+.context-menu-item, .node > .outline {
   cursor: pointer;
 }
 
