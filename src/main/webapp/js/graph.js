@@ -388,7 +388,7 @@ NeoD3Geometry = (function() {
   };
 
   function NeoD3Geometry() {
-    this.relationshipRouting = new neo.utils.pairwiseArcsRelationshipRouting(this.style);
+    this.relationshipRouting = new neo.utils.pairwiseArcsRelationshipRouting();
   }
 
   addShortenedNextWord = function(line, word, measure) {
@@ -605,7 +605,10 @@ neo.viz = function(elem, measureSize, graph, layout) {
     nodeGroups = svg.select("g.layer.nodes").selectAll("g.node").data(nodes, function(d) {
       return d.id;
     });
-    nodeGroups.enter().append("g").attr("class", function(d) { return "node " + d.labels; }).call(force.drag).call(clickHandler).on('mouseover', onNodeMouseOver).on('mouseout', onNodeMouseOut);
+    nodeGroups.enter().append("g").attr("class", function(d) { return "node " + d.labels; }).call(force.drag)
+        .call(clickHandler)
+        .on('mouseover', onNodeMouseOver)
+        .on('mouseout', onNodeMouseOut);
     nodeGroups.classed("selected", function(node) {
       return node.selected;
     });
@@ -713,7 +716,7 @@ var GetGraph = function(response) {
 var d3callback = function(error, response) {
   if (error) return;
   var graph, graphView, nodeClicked, toggleSelection, selectedItem, $element,
-    measureSize;
+    measureSize, tooltipDiv;
   graph = GetGraph(response);
   $element = $('#graph');
   measureSize = function() {
@@ -722,6 +725,9 @@ var d3callback = function(error, response) {
       height: $element.height()
     };
   };
+  div = d3.select($element[0]).append("div")
+      .attr("class", "tooltip")
+      .style("opacity", 0);
   graphView = new neo.GraphView($element[0], measureSize, graph);
   selectedItem = null;
   toggleSelection = (function(_this) {
@@ -768,6 +774,21 @@ var d3callback = function(error, response) {
     }
     getNodeNeigbours(d);
   })
+  .on('nodeMouseOver', function(d) {
+    div.transition()
+      .duration(200)
+      .style("opacity", .9);
+    div.html(
+        "<strong>Name: </strong>" + d.propertyMap["title"] + "</br>" +
+        "<strong>Description: </strong>" + "Description"
+        )
+      .style("left", (d3.event.pageX) + "px")
+      .style("top", (d3.event.pageY - 28) + "px");
+  }).on("nodeMouseOut", function(d) {
+    div.transition()
+      .duration(500)
+      .style("opacity", 0);
+  });
   graphView.update();
 }
 
